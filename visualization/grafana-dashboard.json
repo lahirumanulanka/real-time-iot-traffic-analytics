@@ -1,0 +1,29 @@
+{
+  "__inputs": [],
+  "__requires": [
+    { "type": "grafana", "id": "grafana", "name": "Grafana", "version": "10.4.2" },
+    { "type": "panel", "id": "timeseries", "name": "Time series", "version": "10.4.2" }
+  ],
+  "title": "Traffic Metrics",
+  "editable": true,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Average Count per Sensor (Hourly)",
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 0},
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "postgres" },
+          "format": "time_series",
+          "rawQuery": true,
+          "sql": "SELECT hour AS time, sensor_id, avg_count FROM traffic_metrics ORDER BY time;"
+        }
+      ],
+      "options": {
+        "legend": {"displayMode": "list", "placement": "bottom"}
+      }
+    }
+  ],
+  "templating": {"list": []},
+  "time": {"from": "now-7d", "to": "now"}
+}
