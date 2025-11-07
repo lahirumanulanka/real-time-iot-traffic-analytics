@@ -11,6 +11,7 @@ BOOTSTRAP_SERVER=${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
 TOPICS=(
   "traffic.raw:3:1"
   "traffic.processed:3:1"
+  "traffic.metrics:3:1"
 )
 
 for t in "${TOPICS[@]}"; do

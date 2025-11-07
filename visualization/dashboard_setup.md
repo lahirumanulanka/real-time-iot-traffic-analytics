@@ -44,10 +44,110 @@ bash /app/kafka/topics/create_topics.sh
    - TLS/SSL: disabled (local dev)
 3. Save & test.
 
+## 4) Create dashboards (SQL panels)
+
+Below are starter queries for the required visuals. Create a new dashboard and add the panels.
+
+### A) Time-series: hourly traffic flow per sensor
+
+Panel type: Time series
+
+Query (PostgreSQL):
+
+```sql
+SELECT
+   hour AS "time",
+   sensor_id,
+   avg_count
+FROM traffic_metrics
+WHERE $__timeFilter(hour)
+   AND sensor_id IN ($sensor)
+ORDER BY 1 ASC;
+```
+
+Recommended:
+- Add a dashboard variable `sensor` (type: Query) with query: `SELECT DISTINCT sensor_id FROM traffic_metrics ORDER BY sensor_id`
+- Multi-value enabled.
+
+### B) Bar/Line: daily peak volume across all sensors
+
+Panel type: Bar chart or Time series (bars)
+
+Query:
+
+```sql
+SELECT
+   day::timestamp AS "time",
+   peak_volume
+FROM daily_peak_volume
+WHERE $__timeFilter(day::timestamp)
+ORDER BY 1 ASC;
+```
+
+### C) Bar/Line: daily total/average volume (derived from hourly)
+
+Panel type: Time series
+
+Query (daily total volume):
+
+```sql
+SELECT
+   date(hour) AS day,
+   SUM(avg_count * samples) AS daily_total_volume
+FROM traffic_metrics
+WHERE $__timeFilter(hour)
+GROUP BY date(hour)
+ORDER BY day ASC;
+```
+
+Optionally plot average per sensor:
+
+```sql
+SELECT
+   date(hour) AS day,
+   AVG(avg_count) AS daily_avg_per_row
+FROM traffic_metrics
+WHERE $__timeFilter(hour)
+GROUP BY date(hour)
+ORDER BY day ASC;
+```
+
+### D) Gauge/Table: sensor availability (%)
+
+Panel type: Table (and/or Gauge)
+
+To show latest day for each sensor:
+
+```sql
+WITH latest_day AS (
+   SELECT MAX(day) AS d FROM sensor_daily_availability
+)
+SELECT
+   s.sensor_id,
+   s.day,
+   s.hours_seen,
+   s.hours_expected,
+   s.availability
+FROM sensor_daily_availability s, latest_day ld
+WHERE s.day = ld.d
+ORDER BY s.sensor_id ASC;
+```
+
+For a single-sensor gauge, add a variable `sensor_g` and filter with `WHERE s.sensor_id = '$sensor_g'`.
+
+## 5) Import the example dashboard (optional)
+
 ## 4) Import the dashboard
 
 1. In Grafana, click Dashboards → New → Import.
 2. Upload `visualization/grafana-dashboard.json`.
 3. Select your Postgres datasource when prompted.
 
-You should now see a time series panel querying the `traffic_metrics` table.
+You should now see the prebuilt panels.
+
+## Notes
+- Publishing paths:
+   - Raw events → `traffic.raw`
+   - Hourly aggregates → `traffic.processed` (also persisted in `traffic_metrics`)
+   - Daily metrics (peak + availability) → `traffic.metrics` (also persisted)
+- Direct Kafka in Grafana: not officially supported; use Postgres as the sink (recommended). There are community Kafka datasource plugins, but they’re less maintained and not as reliable as SQL.
