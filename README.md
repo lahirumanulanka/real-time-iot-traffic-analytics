@@ -53,6 +53,56 @@ Check consumer logs:
 docker logs -f traffic-consumer
 ```
 
+## Kafka Connect: simple file ingestion
+
+Start Kafka Connect:
+
+```powershell
+docker compose up -d kafka-connect
+```
+
+Register a sample FileStream source connector (reads `connectors/input/traffic_sample.txt` and writes to `traffic.raw`):
+
+```powershell
+docker exec -it kafka-connect bash -lc "/data/register.sh"
+```
+
+Check connector status:
+
+```powershell
+curl http://localhost:8083/connectors/filestream-source/status
+```
+
+Verify records in topic:
+
+```powershell
+docker exec -it kafka bash -lc "kafka-console-consumer --bootstrap-server kafka:9092 --topic traffic.raw --from-beginning --timeout-ms 5000 | head -n 20"
+```
+
+## Grafana setup (Postgres datasource + starter dashboard)
+
+Bring up Postgres and Grafana:
+
+```powershell
+docker compose up -d postgres grafana
+```
+
+Open Grafana at http://localhost:3000 (user: admin, pass: admin). A datasource named "Traffic Postgres" and a dashboard "Traffic Overview" will be provisioned automatically. The dashboard contains a simple sanity check query; add panels once processed data is in Postgres.
+
+## Data cleaning (Python, no extra deps)
+
+Clean the raw dataset and produce cleaned CSV and JSONL files under `data/cleaned`:
+
+```powershell
+.\.venv\Scripts\python.exe utils/clean_data.py --input data/dataset/traffic_counts.csv --outdir data/cleaned
+```
+
+This will:
+- Parse `created_date`/`modified_date` to ISO-8601 UTC
+- Extract `location_latitude`/`location_longitude` from the `LOCATION` WKT
+- Normalize IDs and text, drop incomplete rows, and deduplicate
+- Write `traffic_counts_clean.csv` and `traffic_counts_clean.jsonl`
+
 ### Notes
 
 - The topic creation script is `kafka-scripts/create-topics.sh` and is mounted into the Kafka containers.

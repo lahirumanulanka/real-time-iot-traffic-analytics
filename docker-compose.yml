@@ -66,9 +66,7 @@ services:
       - ./kafka-scripts:/app/kafka:ro
 
   kafka-connect:
-    build:
-      context: ./kafka-connect
-      dockerfile: Dockerfile
+    image: confluentinc/cp-kafka-connect:7.6.1
     container_name: kafka-connect
     restart: unless-stopped
     depends_on:

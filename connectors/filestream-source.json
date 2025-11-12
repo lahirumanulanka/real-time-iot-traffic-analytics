@@ -1,0 +1,11 @@
+{
+  "name": "filestream-source",
+  "config": {
+    "connector.class": "org.apache.kafka.connect.file.FileStreamSourceConnector",
+    "tasks.max": "1",
+    "file": "/data/input/traffic_sample.txt",
+    "topic": "traffic.raw",
+    "value.converter": "org.apache.kafka.connect.storage.StringConverter",
+    "key.converter": "org.apache.kafka.connect.storage.StringConverter"
+  }
+}
