@@ -1,4 +1,0 @@
-kafka-python==2.0.2
-pandas==2.2.3
-python-dotenv==1.0.1
-# Parquet output is optional; install pyarrow or fastparquet manually if needed

@@ -1,86 +1,62 @@
-# Real-time IoT Traffic Analytics
+## Kafka setup on Docker Desktop (Windows)
 
-Stream, process, store, and visualize live traffic sensor data using Apache Kafka, PostgreSQL, and Grafana.
+This project includes a ready-to-run Apache Kafka setup with Zookeeper and a helper to create the required topics for raw and processed traffic data.
 
-## Stack
+Assumptions:
+- Docker Desktop is installed and running.
+- We use Confluent Kafka with Zookeeper (already defined in `docker-compose.yml`).
+- Topics created: `traffic.raw` (raw sensor data) and `traffic.processed` (aggregated outputs).
 
-- Kafka + Zookeeper (Bitnami images)
-- Kafka UI (topic/browser)
-- PostgreSQL (time-series table for aggregates)
-- Grafana (dashboard)
-- Python producer (CSV → Kafka)
-- Python consumer (Kafka → aggregation → Kafka + optional DB)
+### 1) Start Kafka dependencies only
 
-## Quick start
-
-Prereqs: Docker Desktop (Windows), Python 3.10+.
+To avoid building optional services, start just Zookeeper, Kafka and the UI:
 
 ```powershell
-# 1) Start infra (Kafka, ZK, Postgres, Grafana, Kafka UI)
-docker compose up -d zookeeper kafka postgres grafana kafka-ui
-
-# 2) Create topics (run inside the Kafka container)
-docker cp .\kafka\topics\create_topics.sh kafka:/app/kafka/topics/create_topics.sh
-docker exec -it kafka bash -lc "chmod +x /app/kafka/topics/create_topics.sh && /app/kafka/topics/create_topics.sh"
-
-# 3) (Optional) verify topics
-docker exec -it kafka bash -lc "/opt/bitnami/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list"
-
-# 4) Configure Grafana
-# Visit http://localhost:3000 (admin/admin), add a PostgreSQL datasource:
-#   Host: postgres:5432, DB: traffic, User: analytics, Pass: analytics
-#   Then import visualization/grafana-dashboard.json
-
-# 5) Install Python deps (producer)
-python -m venv .venv; .\.venv\Scripts\Activate.ps1
-pip install -r .\producer\requirements.txt
-
-# 6) Install Python deps (consumer)
-pip install -r .\consumer\requirements.txt
-
-# 7) Run consumer (aggregation → Kafka + local JSON)
-# Leave this running in a terminal
-python .\consumer\consumer.py
-
-# 8) Run producer (streams sample CSV to Kafka)
-python .\producer\producer.py
+docker compose up -d zookeeper kafka kafka-ui
 ```
 
-Kafka UI is available at http://localhost:8080.
+Wait until the Kafka container is healthy (about ~10–20s).
 
-## Configuration
+### 2) Create required topics
 
-Edit `utils/config.env` to adjust:
+Use the provided one-off init service to create topics idempotently:
 
-- `KAFKA_BOOTSTRAP_SERVERS` (host apps use `localhost:9094`)
-- `RAW_TOPIC` (`traffic.raw`)
-- `PROCESSED_TOPIC` (`traffic.processed`)
-- `POSTGRES_*` (for Python apps)
-- `STREAM_DELAY_MS` (producer pacing)
-
-> Note: Inside Docker, services reach Kafka via `kafka:9092`; from the host (Python apps), use `localhost:9094`.
-
-## Data flow
-
-1. Producer reads CSV rows and publishes JSON to `traffic.raw`.
-2. Consumer reads `traffic.raw`, computes running hourly averages per sensor, writes results to `traffic.processed` and `consumer/output/processed_data.json` for debug.
-3. Storage app (`storage/db_connector.py`) can persist processed records into Postgres `traffic_metrics`.
-4. Grafana visualizes hourly averages from Postgres.
-
-## Folder structure
-
-```
-docker-compose.yml
-kafka/
-producer/
-consumer/
-storage/
-visualization/
-utils/
+```powershell
+docker compose run --rm kafka-init
 ```
 
-## Next steps
+You should see logs indicating `traffic.raw` and `traffic.processed` exist/are created.
 
-- Replace the sample `producer/dataset/traffic_counts.csv` with the real City of Austin dataset.
-- Extend `consumer/analytics.py` for more metrics (daily peaks, rolling windows, anomalies).
-- Write a small service to persist `traffic.processed` to Postgres continuously.
+Verify:
+
+```powershell
+docker exec -it kafka bash -lc "kafka-topics --bootstrap-server kafka:9092 --list"
+```
+
+Optional: if you also want a metrics topic (used by the consumer), create it:
+
+```powershell
+docker exec -it kafka bash -lc "kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic traffic.metrics --partitions 3 --replication-factor 1"
+```
+
+### 3) Run producer/consumer (optional)
+
+Once topics are ready, you can start the producer and consumer services:
+
+```powershell
+docker compose up -d traffic-producer traffic-consumer
+```
+
+Check consumer logs:
+
+```powershell
+docker logs -f traffic-consumer
+```
+
+### Notes
+
+- The topic creation script is `kafka-scripts/create-topics.sh` and is mounted into the Kafka containers.
+- The script waits for Kafka to be reachable and is safe to run multiple times.
+- `KAFKA_AUTO_CREATE_TOPICS_ENABLE` is disabled in this setup; topics must be created explicitly.
+- Access Kafka UI at http://localhost:8080 to browse topics and messages.
+
