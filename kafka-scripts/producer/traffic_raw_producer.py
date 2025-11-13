@@ -74,9 +74,12 @@ def clean_record(rec: Dict[str, Any]) -> Dict[str, Any]:
         detector_id = "unknown"
     detector_id = str(detector_id).replace(",", "").strip()
 
-    # Common fields in dataset; fall back gracefully
-    vehicle_count = to_int(rec.get("vehicle_count") or rec.get("count") or rec.get("volume"), 0)
-    avg_speed_kph = to_float(rec.get("avg_speed_kph") or rec.get("speed_kph") or rec.get("avg_speed"), None)
+    # Optional numeric fields: include only if present in source
+    _veh_raw = rec.get("vehicle_count") or rec.get("count") or rec.get("volume")
+    vehicle_count = to_int(_veh_raw, 0) if _veh_raw is not None else None
+
+    _spd_raw = rec.get("avg_speed_kph") or rec.get("speed_kph") or rec.get("avg_speed")
+    avg_speed_kph = to_float(_spd_raw, None) if _spd_raw is not None else None
     detector_status = (rec.get("detector_status") or rec.get("status") or "OK").strip()
 
     # Timestamp normalize to ISO8601 UTC
@@ -89,11 +92,14 @@ def clean_record(rec: Dict[str, Any]) -> Dict[str, Any]:
     out = dict(rec)  # retain original fields
     out.update({
         "detector_id": detector_id,
-        "vehicle_count": vehicle_count,
-        "avg_speed_kph": avg_speed_kph,
         "detector_status": detector_status,
         "timestamp": timestamp,
     })
+    # include optional numeric fields only if present in source
+    if vehicle_count is not None:
+        out["vehicle_count"] = vehicle_count
+    if avg_speed_kph is not None:
+        out["avg_speed_kph"] = avg_speed_kph
     return out
 
 
@@ -132,7 +138,10 @@ def main() -> int:
             key = rec.get("detector_id")
             producer.send(args.topic, key=key, value=rec)
             sent += 1
-            print(f"Raw#{sent} key={key} vehicle_count={rec.get('vehicle_count')} speed={rec.get('avg_speed_kph')} status={rec.get('detector_status')}")
+            print(
+                f"Raw#{sent} key={key} type={rec.get('detector_type')} "
+                f"status={rec.get('detector_status')} signal_id={rec.get('signal_id')} ts={rec.get('timestamp')}"
+            )
             producer.flush(5)
             time.sleep(args.interval)
     except KeyboardInterrupt:

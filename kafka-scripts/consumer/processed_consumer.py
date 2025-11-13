@@ -14,10 +14,10 @@ def try_json(value: bytes):
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Consume processed traffic messages and print summaries.")
+    parser = argparse.ArgumentParser(description="Consume traffic messages (raw or processed) and print summaries.")
     parser.add_argument("--bootstrap", default="localhost:29092", help="Kafka bootstrap servers")
-    parser.add_argument("--topic", default="iot.traffic.processed", help="Processed topic name")
-    parser.add_argument("--group-id", default="processed-consumer", help="Consumer group id")
+    parser.add_argument("--topic", default="iot.traffic.raw", help="Topic name (raw or processed)")
+    parser.add_argument("--group-id", default="traffic-consumer", help="Consumer group id")
     parser.add_argument("--from-beginning", action="store_true", help="Start from earliest offsets")
     parser.add_argument("--max", type=int, default=0, help="Max messages to read (0=unbounded)")
     parser.add_argument("--show-keys", action="store_true", help="Print message keys")
@@ -38,12 +38,20 @@ def main() -> int:
             parsed = try_json(msg.value)
             key_display = f" key={msg.key.decode('utf-8', errors='replace')}" if (args.show_keys and msg.key) else ""
             if isinstance(parsed, dict):
-                print(
-                    f"Processed#{count+1}{key_display} det={parsed.get('detector_id')} cnt={parsed.get('vehicle_count')} "
-                    f"speed_kph={parsed.get('avg_speed_kph')} congested={parsed.get('is_congested')}"
-                )
+                if 'is_operational' in parsed:
+                    # Processed dataset format
+                    print(
+                        f"Msg#{count+1}{key_display} det={parsed.get('detector_id')} type={parsed.get('detector_type')} "
+                        f"status={parsed.get('detector_status')} is_operational={parsed.get('is_operational')}"
+                    )
+                else:
+                    # Raw dataset format
+                    print(
+                        f"Msg#{count+1}{key_display} det={parsed.get('detector_id')} type={parsed.get('detector_type')} "
+                        f"status={parsed.get('detector_status')} ts={parsed.get('timestamp')}"
+                    )
             else:
-                print(f"Processed#{count+1}{key_display} {parsed}")
+                print(f"Msg#{count+1}{key_display} {parsed}")
             count += 1
             if args.max > 0 and count >= args.max:
                 break
@@ -51,7 +59,7 @@ def main() -> int:
         print("Interrupted by user.")
     finally:
         consumer.close()
-    print(f"Consumed {count} processed message(s) from '{args.topic}'.")
+    print(f"Consumed {count} message(s) from '{args.topic}'.")
     return 0
 
 

@@ -16,7 +16,7 @@ def main() -> int:
     consumer = KafkaConsumer(
         args.topic,
         bootstrap_servers=args.bootstrap,
-        group_id="traffic-consumer-kafkapy",
+        group_id="sample_traffic-consumer-kafkapy",
         enable_auto_commit=False,
         auto_offset_reset=auto_offset_reset,
         value_deserializer=lambda v: v.decode("utf-8", errors="replace"),

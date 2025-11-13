@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Process raw traffic readings from `iot.traffic.raw` and publish to `iot.traffic.processed`.
 
-Adds derived fields like `speed_mps` and `is_congested`, preserves original fields,
-and stamps `processed_at`.
+Schema updated for traffic_counts_kafka.json:
+- Derives `is_operational` from detector_status (True if startswith 'OK').
+- Preserves original fields and adds `processed_at`.
 """
 import argparse
 import json
@@ -23,25 +24,10 @@ def try_json(value: bytes) -> Any:
 
 def derive(rec: Dict[str, Any]) -> Dict[str, Any]:
     out = dict(rec)
-    speed_kph = rec.get("avg_speed_kph")
-    speed_mps = None
-    try:
-        if speed_kph is not None:
-            speed_mps = float(speed_kph) / 3.6
-    except Exception:
-        speed_mps = None
-
-    vehicle_count = rec.get("vehicle_count") or 0
-    try:
-        vehicle_count = int(vehicle_count)
-    except Exception:
-        vehicle_count = 0
-
-    is_congested = (speed_kph is not None and isinstance(speed_kph, (int, float)) and speed_kph < 25) or vehicle_count > 40
-
+    status = (rec.get("detector_status") or "").strip()
+    is_operational = status.startswith("OK")
     out.update({
-        "speed_mps": round(speed_mps, 2) if isinstance(speed_mps, (int, float)) else None,
-        "is_congested": bool(is_congested),
+        "is_operational": bool(is_operational),
         "processed_at": datetime.now(timezone.utc).isoformat(),
     })
     return out
@@ -86,8 +72,8 @@ def main() -> int:
             processed = derive(parsed)
             producer.send(args.processed_topic, key=key, value=processed)
             print(
-                f"Processed#{count+1} key={key} cnt={processed.get('vehicle_count')} "
-                f"speed_kph={processed.get('avg_speed_kph')} congested={processed.get('is_congested')}"
+                f"Processed#{count+1} key={key} type={processed.get('detector_type')} "
+                f"status={processed.get('detector_status')} is_operational={processed.get('is_operational')}"
             )
             count += 1
             if args.max > 0 and count >= args.max:
