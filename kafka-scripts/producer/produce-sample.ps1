@@ -16,8 +16,8 @@ try {
         $now = [DateTimeOffset]::UtcNow.ToString("o")
         $sensorId = "traffic-sensor-" + ((Get-Random -Minimum 1 -Maximum ($Sensors+1)))
         $vehicleCount = (Get-Random -Minimum 0 -Maximum 50)
-    $avgSpeed = [Math]::Round((Get-Random -Minimum 20.0 -Maximum 100.0), 1)
-    $occupancy = [Math]::Round((Get-Random -Minimum 0.0 -Maximum 100.0), 1)
+        $avgSpeed = [Math]::Round((Get-Random -Minimum 20.0 -Maximum 100.0), 1)
+        $occupancy = [Math]::Round((Get-Random -Minimum 0.0 -Maximum 100.0), 1)
 
         $obj = [ordered]@{
             timestamp = $now

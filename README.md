@@ -86,17 +86,17 @@ Produce and consume test messages using helper scripts.
 
 Produce random JSON messages to a topic (default: iot.traffic.raw):
 ```powershell
-./kafka-scripts/produce-sample.ps1 -Count 10 -RateMs 0 -Topic "iot.traffic.raw"
+./kafka-scripts/producer/produce-sample.ps1 -Count 10 -RateMs 0 -Topic "iot.traffic.raw"
 ```
 
 Consume a few messages from the topic:
 ```powershell
-./kafka-scripts/consume.ps1 -Topic "iot.traffic.raw" -FromBeginning -MaxMessages 5
+./kafka-scripts/consumer/consume.ps1 -Topic "iot.traffic.raw" -FromBeginning -MaxMessages 5
 ```
 
 Publish the bundled CSV to Kafka as JSON (first 50 rows by default):
 ```powershell
-./kafka-scripts/produce-from-csv.ps1 -CsvPath "${PWD}\data\dataset\traffic_counts.csv" -Topic "iot.traffic.raw" -MaxRows 50
+./kafka-scripts/producer/produce-from-csv.ps1 -CsvPath "${PWD}\data\dataset\traffic_counts.csv" -Topic "iot.traffic.raw" -MaxRows 50
 ```
 
 
