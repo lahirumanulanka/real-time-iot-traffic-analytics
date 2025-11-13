@@ -81,6 +81,25 @@ Provisioning locations:
 
 To add a real data source (e.g., Prometheus, InfluxDB, PostgreSQL), create a datasource file in `grafana/provisioning/datasources` and add dashboards under `grafana/dashboards`, then restart Grafana.
 
+## Verify Kafka message flow
+Produce and consume test messages using helper scripts.
+
+Produce random JSON messages to a topic (default: iot.traffic.raw):
+```powershell
+./kafka-scripts/produce-sample.ps1 -Count 10 -RateMs 0 -Topic "iot.traffic.raw"
+```
+
+Consume a few messages from the topic:
+```powershell
+./kafka-scripts/consume.ps1 -Topic "iot.traffic.raw" -FromBeginning -MaxMessages 5
+```
+
+Publish the bundled CSV to Kafka as JSON (first 50 rows by default):
+```powershell
+./kafka-scripts/produce-from-csv.ps1 -CsvPath "${PWD}\data\dataset\traffic_counts.csv" -Topic "iot.traffic.raw" -MaxRows 50
+```
+
+
 ### Stop and clean up
 ```powershell
 # Stop containers
