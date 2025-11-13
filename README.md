@@ -1,112 +1,96 @@
-## Kafka setup on Docker Desktop (Windows)
+## Kafka on Docker (Windows + Docker Desktop)
 
-This project includes a ready-to-run Apache Kafka setup with Zookeeper and a helper to create the required topics for raw and processed traffic data.
+This project includes a ready-to-run Apache Kafka stack using Docker Compose. It runs Kafka in KRaft mode (no Zookeeper required) and an optional web UI for quick inspection.
 
-Assumptions:
-- Docker Desktop is installed and running.
-- We use Confluent Kafka with Zookeeper (already defined in `docker-compose.yml`).
-- Topics created: `traffic.raw` (raw sensor data) and `traffic.processed` (aggregated outputs).
+### What gets started
+- `kafka` (single broker, KRaft mode)
+- `kafka-ui` at http://localhost:8080
 
-### 1) Start Kafka dependencies only
+### Prerequisites
+- Docker Desktop (Windows) installed and running
+- PowerShell (commands below are copy-paste ready)
 
-To avoid building optional services, start just Zookeeper, Kafka and the UI:
-
+### Start
 ```powershell
-docker compose up -d zookeeper kafka kafka-ui
+docker compose -f "${PWD}\docker-compose.yml" up -d
 ```
 
-Wait until the Kafka container is healthy (about ~10–20s).
-
-### 2) Create required topics
-
-Use the provided one-off init service to create topics idempotently:
-
+Wait ~10–20 seconds. Verify containers are healthy:
 ```powershell
-docker compose run --rm kafka-init
+docker ps
 ```
 
-You should see logs indicating `traffic.raw` and `traffic.processed` exist/are created.
+Open the UI at:
+- http://localhost:8080
 
-Verify:
+### How to connect
+- From apps running on your host machine: `localhost:29092`
+- From services inside the Docker network: `kafka:9092`
 
+### Quick test (optional)
+Create a topic, produce, and consume test messages:
 ```powershell
-docker exec -it kafka bash -lc "kafka-topics --bootstrap-server kafka:9092 --list"
+# Create a topic
+docker exec kafka bash -lc "kafka-topics --bootstrap-server localhost:9092 --create --topic test-traffic --partitions 1 --replication-factor 1 || true"
+
+# Produce one message
+docker exec kafka bash -lc "printf 'hello-from-readme\n' | kafka-console-producer --bootstrap-server localhost:9092 --topic test-traffic 1>$null"
+
+# Consume from the beginning
+docker exec kafka bash -lc "kafka-console-consumer --bootstrap-server localhost:9092 --topic test-traffic --from-beginning --timeout-ms 3000"
 ```
 
-Optional: if you also want a metrics topic (used by the consumer), create it:
+You should see `hello-from-readme` in the output.
 
+## Project topics
+Two topics are used by this project:
+- `iot.traffic.raw` — raw sensor data ingestion
+- `iot.traffic.processed` — processed/aggregated outputs
+
+Create them with the provided script:
 ```powershell
-docker exec -it kafka bash -lc "kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic traffic.metrics --partitions 3 --replication-factor 1"
+./kafka-scripts/create-topics.ps1
 ```
 
-### 3) Run producer/consumer (optional)
-
-Once topics are ready, you can start the producer and consumer services:
-
+Options (all optional):
 ```powershell
-docker compose up -d traffic-producer traffic-consumer
+./kafka-scripts/create-topics.ps1 -Bootstrap "localhost:9092" -RawTopic "iot.traffic.raw" -ProcessedTopic "iot.traffic.processed" -Partitions 3 -ReplicationFactor 1
 ```
 
-Check consumer logs:
-
-```powershell
-docker logs -f traffic-consumer
+Linux/macOS users can run the bash version:
+```bash
+bash ./kafka-scripts/create-topics.sh
 ```
 
-## Kafka Connect: simple file ingestion
+## Grafana dashboard environment
+- Service: `grafana` at http://localhost:3000
+- Default credentials: admin / admin (change after first login)
+- Pre-provisioned:
+	- Datasource: TestData (built-in) as default
+	- Dashboard: "Traffic Overview (TestData)"
 
-Start Kafka Connect:
-
+Start only Grafana:
 ```powershell
-docker compose up -d kafka-connect
+docker compose -f "${PWD}\docker-compose.yml" up -d grafana
 ```
 
-Register a sample FileStream source connector (reads `connectors/input/traffic_sample.txt` and writes to `traffic.raw`):
+Provisioning locations:
+- Datasources: `grafana/provisioning/datasources/`
+- Dashboards provisioning: `grafana/provisioning/dashboards/`
+- Dashboard JSONs: `grafana/dashboards/`
 
+To add a real data source (e.g., Prometheus, InfluxDB, PostgreSQL), create a datasource file in `grafana/provisioning/datasources` and add dashboards under `grafana/dashboards`, then restart Grafana.
+
+### Stop and clean up
 ```powershell
-docker exec -it kafka-connect bash -lc "/data/register.sh"
+# Stop containers
+docker compose -f "${PWD}\docker-compose.yml" down
+
+# Remove data volume (optional: wipes topics/messages)
+docker volume rm real-time-iot-traffic-analytics_kafka_data
 ```
-
-Check connector status:
-
-```powershell
-curl http://localhost:8083/connectors/filestream-source/status
-```
-
-Verify records in topic:
-
-```powershell
-docker exec -it kafka bash -lc "kafka-console-consumer --bootstrap-server kafka:9092 --topic traffic.raw --from-beginning --timeout-ms 5000 | head -n 20"
-```
-
-## Grafana setup (Postgres datasource + starter dashboard)
-
-Bring up Postgres and Grafana:
-
-```powershell
-docker compose up -d postgres grafana
-```
-
-Open Grafana at http://localhost:3000 (user: admin, pass: admin). A datasource named "Traffic Postgres" and a dashboard "Traffic Overview" will be provisioned automatically. The dashboard contains a simple sanity check query; add panels once processed data is in Postgres.
-
-## Data cleaning (Python, no extra deps)
-
-Clean the raw dataset and produce cleaned CSV and JSONL files under `data/cleaned`:
-
-```powershell
-.\.venv\Scripts\python.exe utils/clean_data.py --input data/dataset/traffic_counts.csv --outdir data/cleaned
-```
-
-This will:
-- Parse `created_date`/`modified_date` to ISO-8601 UTC
-- Extract `location_latitude`/`location_longitude` from the `LOCATION` WKT
-- Normalize IDs and text, drop incomplete rows, and deduplicate
-- Write `traffic_counts_clean.csv` and `traffic_counts_clean.jsonl`
 
 ### Notes
-
-- The topic creation script is `kafka-scripts/create-topics.sh` and is mounted into the Kafka containers.
-- The script waits for Kafka to be reachable and is safe to run multiple times.
-- `KAFKA_AUTO_CREATE_TOPICS_ENABLE` is disabled in this setup; topics must be created explicitly.
-- Access Kafka UI at http://localhost:8080 to browse topics and messages.
+- This setup uses KRaft (Kafka without Zookeeper), which is the current recommended architecture for Kafka 3.x.
+- If you specifically need Zookeeper, we can add a ZK-based variant on request, but it's not required for this stack.
 

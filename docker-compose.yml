@@ -1,188 +1,64 @@
-version: "3.9"
-
 services:
-  zookeeper:
-    image: zookeeper:3.9
-    container_name: zookeeper
-    restart: unless-stopped
-    ports:
-      - "2181:2181"
-    environment:
-      ZOO_MY_ID: 1
-      ZOO_CFG_EXTRA: |-
-        tickTime=2000
-        initLimit=5
-        syncLimit=2
-        standaloneEnabled=true
-    healthcheck:
-      test: ["CMD", "bash", "-c", "echo ruok | nc localhost 2181 | grep imok"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-    volumes:
-      - zookeeper_data:/data
-      - zookeeper_datalog:/datalog
-
   kafka:
     image: confluentinc/cp-kafka:7.6.1
     container_name: kafka
-    restart: unless-stopped
-    depends_on:
-      - zookeeper
     ports:
-      - "9092:9092"      # internal (container-to-container)
-      - "9094:9094"      # external (host apps)
+      - "9092:9092"   # internal (Docker network) listener
+      - "29092:29092" # external (localhost) listener
     environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:9094
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9094
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-      KAFKA_LOG_RETENTION_HOURS: 168
-      KAFKA_LOG_SEGMENT_BYTES: 1073741824
-      KAFKA_LOG_DIRS: /var/lib/kafka/data
-    healthcheck:
-      test: ["CMD", "bash", "-c", "kafka-topics --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
+      - KAFKA_PROCESS_ROLES=broker,controller
+      - KAFKA_NODE_ID=1
+      - KAFKA_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+      - KAFKA_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:29092
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092,EXTERNAL://localhost:29092
+      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT
+      - KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1
+      - CLUSTER_ID=abcdefghijklmnopqrstuv
     volumes:
       - kafka_data:/var/lib/kafka/data
-      - ./kafka-scripts:/app/kafka:ro
+    networks:
+      - kafka-net
 
-  kafka-init:
-    image: confluentinc/cp-kafka:7.6.1
-    container_name: kafka-init
-    restart: "no"
-    depends_on:
-      - kafka
-    command: ["bash", "-lc", "/app/kafka/create-topics.sh kafka:9092"]
-    volumes:
-      - ./kafka-scripts:/app/kafka:ro
-
-  kafka-connect:
-    image: confluentinc/cp-kafka-connect:7.6.1
-    container_name: kafka-connect
-    restart: unless-stopped
-    depends_on:
-      - kafka
-    ports:
-      - "8083:8083"
-    environment:
-      CONNECT_BOOTSTRAP_SERVERS: kafka:9092
-      CONNECT_REST_ADVERTISED_HOST_NAME: kafka-connect
-      CONNECT_GROUP_ID: connect-cluster
-      CONNECT_CONFIG_STORAGE_TOPIC: connect-configs
-      CONNECT_OFFSET_STORAGE_TOPIC: connect-offsets
-      CONNECT_STATUS_STORAGE_TOPIC: connect-status
-      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
-      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
-      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
-      CONNECT_KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
-      CONNECT_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
-      CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
-      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
-      CONNECT_PLUGIN_PATH: /usr/share/java,/usr/share/confluent-hub-components
-      CONNECT_LOG4J_LOGGERS: org.reflections=ERROR
-    healthcheck:
-      test: ["CMD", "bash", "-lc", "curl -fsS http://localhost:8083/connectors >/dev/null 2>&1"]
-      interval: 30s
-      timeout: 10s
-      retries: 10
-    volumes:
-      - ./connectors:/data:ro
-
+  # Optional web UI for managing Kafka topics and browsing messages
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
     container_name: kafka-ui
-    restart: unless-stopped
-    depends_on:
-      - kafka
     ports:
       - "8080:8080"
     environment:
-      KAFKA_CLUSTERS_0_NAME: local
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
-      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
-
-  postgres:
-    image: postgres:16
-    container_name: postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: analytics
-      POSTGRES_PASSWORD: analytics
-      POSTGRES_DB: traffic
-    ports:
-      - "5432:5432"
-    volumes:
-      - ./storage/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - KAFKA_CLUSTERS_0_NAME=local
+      - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:9092
+    depends_on:
+      - kafka
+    networks:
+      - kafka-net
 
   grafana:
-    image: grafana/grafana:10.4.2
+    image: grafana/grafana:10.4.5
     container_name: grafana
-    restart: unless-stopped
-    depends_on:
-      - postgres
     ports:
       - "3000:3000"
     environment:
-      GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: admin
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_AUTH_ANONYMOUS_ENABLED=false
     volumes:
-      - ./grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
-
-  traffic-producer:
-    build:
-      context: ./producer
-      dockerfile: Dockerfile
-    container_name: traffic-producer
-    restart: unless-stopped
-    depends_on:
-      - kafka
-    environment:
-      BOOTSTRAP: kafka:9092
-      TOPIC: traffic.raw
-      INTERVAL: 5
-      # SOURCE can be set to /app/data/cleaned/traffic_counts_clean.jsonl if mounted
+      - grafana-storage:/var/lib/grafana
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
     networks:
-      - default
-
-  traffic-consumer:
-    build:
-      context: ./consumer
-      dockerfile: Dockerfile
-    container_name: traffic-consumer
-    restart: unless-stopped
-    depends_on:
-      - kafka
-    environment:
-      BOOTSTRAP: kafka:9092
-      IN_TOPIC: traffic.raw
-      OUT_TOPIC: traffic.processed
-      METRICS_TOPIC: traffic.metrics
-      GROUP_ID: traffic-analytics
-      AVAIL_WINDOW_SECONDS: 300
-      PERSIST_TO_POSTGRES: "true"
-      PG_HOST: postgres
-      PG_PORT: 5432
-      PG_DB: traffic
-      PG_USER: analytics
-      PG_PASSWORD: analytics
-    networks:
-      - default
-
-networks:
-  default:
-    name: iot-traffic-net
+      - kafka-net
 
 volumes:
-  zookeeper_data:
-  zookeeper_datalog:
   kafka_data:
+  grafana-storage:
+
+networks:
+  kafka-net:
+
