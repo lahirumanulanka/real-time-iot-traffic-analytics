@@ -1,115 +1,146 @@
-## Kafka on Docker (Windows + Docker Desktop)
+# Real-Time IoT Traffic Analytics (Student Guide)
 
-This project includes a ready-to-run Apache Kafka stack using Docker Compose. It runs Kafka in KRaft mode (no Zookeeper required) and an optional web UI for quick inspection.
+This project demonstrates a simple real-time data pipeline using Kafka and Python to ingest, process, and view traffic detector data.
 
-### What gets started
-- `kafka` (single broker, KRaft mode)
-- `kafka-ui` at http://localhost:8080
+- Producer reads real JSON data every few seconds and publishes to a raw Kafka topic.
+- Processor consumes raw events, derives useful flags, and republishes to a processed topic.
+- Consumer tails the processed topic to verify the end-to-end flow.
 
-### Prerequisites
-- Docker Desktop (Windows) installed and running
-- PowerShell (commands below are copy-paste ready)
 
-### Start
+## Quick Start (Windows PowerShell)
+
+1) Create and activate a virtual environment, then install dependencies:
+
 ```powershell
-docker compose -f "${PWD}\docker-compose.yml" up -d
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
 ```
 
-Wait ~10–20 seconds. Verify containers are healthy:
+2) Start Docker services (Kafka, etc.) in the background:
+
 ```powershell
-docker ps
+# Use the variant that matches your Docker version
+docker compose up -d
+# or
+docker-compose up -d
 ```
 
-Open the UI at:
-- http://localhost:8080
+3) (Optional) Create topics inside the Kafka container:
 
-### How to connect
-- From apps running on your host machine: `localhost:29092`
-- From services inside the Docker network: `kafka:9092`
-
-### Quick test (optional)
-Create a topic, produce, and consume test messages:
 ```powershell
-# Create a topic
-docker exec kafka bash -lc "kafka-topics --bootstrap-server localhost:9092 --create --topic test-traffic --partitions 1 --replication-factor 1 || true"
-
-# Produce one message
-docker exec kafka bash -lc "printf 'hello-from-readme\n' | kafka-console-producer --bootstrap-server localhost:9092 --topic test-traffic 1>$null"
-
-# Consume from the beginning
-docker exec kafka bash -lc "kafka-console-consumer --bootstrap-server localhost:9092 --topic test-traffic --from-beginning --timeout-ms 3000"
+python .\kafka-scripts\create-topics.py --bootstrap localhost:9092
 ```
 
-You should see `hello-from-readme` in the output.
+4) Run all three processes together with the orchestrator:
 
-## Project topics
-Two topics are used by this project:
-- `iot.traffic.raw` — raw sensor data ingestion
-- `iot.traffic.processed` — processed/aggregated outputs
-
-Create them with the provided script:
 ```powershell
-./kafka-scripts/create-topics.ps1
+python .\kafka-scripts\run_all.py
 ```
 
-Options (all optional):
+Press Ctrl+C to stop. The orchestrator will start the processor first, then the producer, then the consumer, and prefix each subprocess line with [PROCESSOR]/[PRODUCER]/[CONSUMER].
+
+
+## Useful Variants (run_all.py)
+
 ```powershell
-./kafka-scripts/create-topics.ps1 -Bootstrap "localhost:9092" -RawTopic "iot.traffic.raw" -ProcessedTopic "iot.traffic.processed" -Partitions 3 -ReplicationFactor 1
+# Start from latest offsets (no replay), default 5s interval
+python .\kafka-scripts\run_all.py --bootstrap localhost:29092
+
+# Replay previous data from the beginning
+python .\kafka-scripts\run_all.py --from-beginning
+
+# Quick check: limit consumer output to 10 messages
+python .\kafka-scripts\run_all.py --consume-max 10
+
+# Change the send interval (seconds)
+python .\kafka-scripts\run_all.py --interval 5
+
+# Use a custom dataset path
+python .\kafka-scripts\run_all.py --json-path .\data\dataset\traffic_counts_kafka.json
+
+# Hide keys in consumer output
+python .\kafka-scripts\run_all.py --no-show-keys
 ```
 
-Linux/macOS users can run the bash version:
-```bash
-bash ./kafka-scripts/create-topics.sh
+Default topics and dataset:
+- Raw topic: `iot.traffic.raw`
+- Processed topic: `iot.traffic.processed`
+- Dataset: `data/dataset/traffic_counts_kafka.json`
+
+
+## What Each Part Does
+
+- Producer (`kafka-scripts/producer/traffic_raw_producer.py`):
+	- Loads records from `data/dataset/traffic_counts_kafka.json`.
+	- Publishes one record every N seconds (default 5) to `iot.traffic.raw`.
+	- Uses `detector_id` as the Kafka message key.
+
+- Processor (`kafka-scripts/processor/traffic_processor.py`):
+	- Consumes from `iot.traffic.raw`.
+	- Derives `is_operational` from `detector_status` (messages with status starting with `OK` are considered operational).
+	- Adds `processed_at` timestamp and publishes the enriched record to `iot.traffic.processed`.
+
+- Consumer (`kafka-scripts/consumer/processed_consumer.py`):
+	- Tails a topic (usually `iot.traffic.processed`) and prints a concise line for each message.
+	- Supports `--show-keys` and `--max` to limit output.
+
+- Orchestrator (`kafka-scripts/run_all.py`):
+	- Starts the processor → producer → consumer in that order.
+	- Clean shutdown on Ctrl+C.
+	- Pass-through options for bootstrap, topics, dataset path, replay behavior, interval, and consumer output limits.
+
+
+## Folder Structure (Key Paths)
+
+```
+docker-compose.yml
+README.md
+requirements.txt
+data/
+	dataset/
+		traffic_counts_kafka.json
+		traffic_counts.csv
+	sample/
+		traffic_sample.csv
+		traffic_sample.json
+grafana/
+	dashboards/
+		traffic-overview.json
+	provisioning/
+		dashboards/
+			dashboards.yml
+		datasources/
+			datasource.yml
+kafka-scripts/
+	create-topics.py
+	run_all.py                    <-- Orchestrator (start all 3)
+	consumer/
+		sample_consume_kafkapy.py
+		traffic_counts_consumer.py
+		processed_consumer.py       <-- Generic consumer used by orchestration
+	producer/
+		sample_produce_from_json_kafkapy.py
+		traffic_counts_producer.py
+		traffic_raw_producer.py     <-- Producer reading dataset to raw topic
+	processor/
+		traffic_processor.py        <-- Processes raw → processed
+notebooks/
+	preprocess_traffic_counts.ipynb
 ```
 
-## Grafana dashboard environment
-- Service: `grafana` at http://localhost:3000
-- Default credentials: admin / admin (change after first login)
-- Pre-provisioned:
-	- Datasource: TestData (built-in) as default
-	- Dashboard: "Traffic Overview (TestData)"
 
-Start only Grafana:
-```powershell
-docker compose -f "${PWD}\docker-compose.yml" up -d grafana
-```
+## Notes for Students
 
-Provisioning locations:
-- Datasources: `grafana/provisioning/datasources/`
-- Dashboards provisioning: `grafana/provisioning/dashboards/`
-- Dashboard JSONs: `grafana/dashboards/`
-
-To add a real data source (e.g., Prometheus, InfluxDB, PostgreSQL), create a datasource file in `grafana/provisioning/datasources` and add dashboards under `grafana/dashboards`, then restart Grafana.
-
-## Verify Kafka message flow
-Produce and consume test messages using helper scripts.
-
-Produce random JSON messages to a topic (default: iot.traffic.raw):
-```powershell
-./kafka-scripts/producer/produce-sample.ps1 -Count 10 -RateMs 0 -Topic "iot.traffic.raw"
-```
-
-Consume a few messages from the topic:
-```powershell
-./kafka-scripts/consumer/consume.ps1 -Topic "iot.traffic.raw" -FromBeginning -MaxMessages 5
-```
-
-Publish the bundled CSV to Kafka as JSON (first 50 rows by default):
-```powershell
-./kafka-scripts/producer/produce-from-csv.ps1 -CsvPath "${PWD}\data\dataset\traffic_counts.csv" -Topic "iot.traffic.raw" -MaxRows 50
-```
+- Start services first (`docker compose up -d`), then run the orchestrator.
+- If topics don’t exist, use `create-topics.py` once (or rely on your Kafka auto-create setting, if enabled).
+- Make sure you are inside the virtual environment when running scripts (`.venv`).
+- If you see missing package errors, run `pip install -r requirements.txt` again. If `six` is missing, install it with `pip install six`.
 
 
-### Stop and clean up
-```powershell
-# Stop containers
-docker compose -f "${PWD}\docker-compose.yml" down
+## Next Steps
 
-# Remove data volume (optional: wipes topics/messages)
-docker volume rm real-time-iot-traffic-analytics_kafka_data
-```
-
-### Notes
-- This setup uses KRaft (Kafka without Zookeeper), which is the current recommended architecture for Kafka 3.x.
-- If you specifically need Zookeeper, we can add a ZK-based variant on request, but it's not required for this stack.
+- Point Grafana at your Kafka-backed store or downstream DB and build on the dashboard in `grafana/dashboards/traffic-overview.json`.
+- Extend the processor to compute aggregates (per detector type/status) or enrich with external metadata.
+- Containerize the Python apps if you want them orchestrated alongside Kafka in Docker.
 
