@@ -55,9 +55,24 @@ services:
     networks:
       - kafka-net
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    environment:
+      - POSTGRES_USER=traffic
+      - POSTGRES_PASSWORD=traffic
+      - POSTGRES_DB=traffic
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    networks:
+      - kafka-net
+
 volumes:
   kafka_data:
   grafana-storage:
+  pg_data:
 
 networks:
   kafka-net:

@@ -21,35 +21,117 @@
   "links": [],
   "panels": [
     {
-      "id": 1,
+      "id": 10,
       "type": "timeseries",
-      "title": "Random walk (TestData)",
-      "datasource": {
-        "type": "grafana-testdata-datasource",
-        "uid": "testdata"
-      },
-      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 0 },
-      "options": {
-        "legend": { "displayMode": "list", "placement": "bottom" },
-        "tooltip": { "mode": "single" }
-      },
+      "title": "Traffic Events per Hour (Sensor: $sensor)",
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
+      "timeFrom": "1h",
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } },
       "targets": [
         {
           "refId": "A",
-          "scenarioId": "random_walk",
-          "alias": "traffic_metric"
+          "datasource": { "type": "postgres", "uid": "postgres" },
+          "format": "time_series",
+          "rawSql": "SELECT $__timeGroup(ts, $__interval) AS time, COUNT(*) AS value FROM traffic_events WHERE ('$sensor'='*' OR detector_id = '$sensor') AND $__timeFilter(ts) GROUP BY 1 ORDER BY 1",
+          "intervalFactor": 1
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Daily Peak Traffic Volume (All Sensors)",
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "timeFrom": "14d",
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "postgres", "uid": "postgres" },
+          "format": "time_series",
+          "rawSql": "WITH hourly AS ( SELECT date_trunc('day', ts) AS day, extract(hour from ts) AS hour_idx, COUNT(*) AS cnt FROM traffic_events WHERE ts >= date_trunc('day', now()) - interval '13 days' AND ts < date_trunc('day', now()) + interval '1 day' GROUP BY 1,2 ), ranked AS ( SELECT day, hour_idx, cnt, ROW_NUMBER() OVER (PARTITION BY day ORDER BY cnt DESC) AS rn FROM hourly ) SELECT day AS time, cnt AS value FROM ranked WHERE rn = 1 ORDER BY day",
+          "intervalFactor": 1
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Daily Average Traffic Volume (All Sensors)",
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "timeFrom": "14d",
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "postgres", "uid": "postgres" },
+          "format": "time_series",
+          "rawSql": "SELECT date_trunc('day', ts) AS time, ROUND(COUNT(*)::numeric / 24.0, 2) AS value FROM traffic_events WHERE ts >= date_trunc('day', now()) - interval '13 days' AND ts < date_trunc('day', now()) + interval '1 day' GROUP BY 1 ORDER BY 1",
+          "intervalFactor": 1
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "gauge",
+      "title": "Sensor Availability (%) - $sensor (Today)",
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 16 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "showThresholdLabels": false, "showThresholdMarkers": true },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "postgres", "uid": "postgres" },
+          "format": "table",
+          "rawSql": "WITH hours_present AS ( SELECT COUNT(DISTINCT date_trunc('hour', ts)) AS hours_with_data FROM traffic_events WHERE ('$sensor'='*' OR detector_id = '$sensor') AND ts >= date_trunc('day', now()) AND ts < date_trunc('day', now()) + interval '1 day' ) SELECT (hours_with_data / 24.0) * 100.0 AS value FROM hours_present",
+          "intervalFactor": 1
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "table",
+      "title": "Sensor Health (Latest Status)",
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "gridPos": { "h": 8, "w": 16, "x": 8, "y": 16 },
+      "options": { "showHeader": true },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "postgres", "uid": "postgres" },
+          "format": "table",
+          "rawSql": "WITH latest AS ( SELECT detector_id, MAX(ts) AS max_ts FROM traffic_events GROUP BY detector_id ) SELECT l.detector_id, e.detector_type, e.detector_status, e.is_operational, e.ts FROM latest l JOIN traffic_events e ON e.detector_id = l.detector_id AND e.ts = l.max_ts ORDER BY e.is_operational DESC, l.detector_id",
+          "intervalFactor": 1
         }
       ]
     }
   ],
-  "refresh": "10s",
+  "refresh": "5s",
   "schemaVersion": 38,
   "style": "dark",
   "tags": ["testdata", "traffic"],
-  "templating": { "list": [] },
-  "time": { "from": "now-6h", "to": "now" },
+  "templating": { "list": [
+    {
+      "name": "sensor",
+      "label": "Sensor",
+      "type": "query",
+      "datasource": { "type": "postgres", "uid": "postgres" },
+      "refresh": 2,
+      "query": "SELECT DISTINCT detector_id FROM traffic_events ORDER BY detector_id LIMIT 200",
+      "definition": "SELECT DISTINCT detector_id FROM traffic_events ORDER BY detector_id LIMIT 200",
+      "sort": 1,
+      "multi": false,
+      "includeAll": true,
+      "allValue": "*",
+      "current": {"text": "All", "value": "*"}
+    }
+  ] },
+  "time": { "from": "now-1h", "to": "now" },
   "timepicker": {},
   "timezone": "",
-  "title": "Traffic Overview (TestData)",
-  "version": 1
+  "title": "Traffic Overview",
+  "version": 2
 }

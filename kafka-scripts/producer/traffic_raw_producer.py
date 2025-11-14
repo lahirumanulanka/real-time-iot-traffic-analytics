@@ -118,7 +118,9 @@ def main() -> int:
     parser.add_argument("--topic", default="iot.traffic.raw", help="Target topic")
     parser.add_argument("--json-path", default=str(Path("data")/"dataset"/"traffic_counts_kafka.json"), help="Source JSON path")
     parser.add_argument("--interval", type=float, default=5.0, help="Seconds between messages (default 5)")
-    parser.add_argument("--max", type=int, default=0, help="Max messages to send (0=all)")
+    parser.add_argument("--max", type=int, default=0, help="Max source records to load (0=all)")
+    parser.add_argument("--loop", action="store_true", help="Continuously loop through the selected records")
+    parser.add_argument("--use-now-timestamps", action="store_true", help="Override each record timestamp with the current UTC time at send")
     args = parser.parse_args()
 
     src = Path(args.json_path)
@@ -134,7 +136,12 @@ def main() -> int:
     producer = build_producer(args.bootstrap)
     sent = 0
     try:
-        for rec in cleaned:
+        idx = 0
+        total = len(cleaned)
+        while True:
+            rec = dict(cleaned[idx])
+            if args.use_now_timestamps:
+                rec["timestamp"] = datetime.now(timezone.utc).isoformat()
             key = rec.get("detector_id")
             producer.send(args.topic, key=key, value=rec)
             sent += 1
@@ -144,6 +151,12 @@ def main() -> int:
             )
             producer.flush(5)
             time.sleep(args.interval)
+            idx += 1
+            if idx >= total:
+                if args.loop:
+                    idx = 0
+                else:
+                    break
     except KeyboardInterrupt:
         print("Interrupted by user.")
     finally:

@@ -6,3 +6,19 @@ datasources:
     uid: testdata
     access: proxy
     isDefault: true
+  - name: Postgres
+    type: postgres
+    uid: postgres
+    access: proxy
+    url: postgres:5432
+    user: traffic
+    database: traffic
+    jsonData:
+      sslmode: disable
+      maxOpenConns: 100
+      maxIdleConns: 10
+      connMaxLifetime: 14400
+      postgresVersion: 1600
+      timescaledb: false
+    secureJsonData:
+      password: traffic

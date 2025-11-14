@@ -39,6 +39,22 @@ def main():
         help="Producer send interval in seconds (default 5)",
     )
     parser.add_argument(
+        "--producer-max",
+        type=int,
+        default=0,
+        help="Max source records for producer to load (0=all)",
+    )
+    parser.add_argument(
+        "--producer-loop",
+        action="store_true",
+        help="Continuously loop producer records",
+    )
+    parser.add_argument(
+        "--use-now-ts",
+        action="store_true",
+        help="Override record timestamps with current UTC time during send",
+    )
+    parser.add_argument(
         "--json-path",
         default=None,
         help="Path to traffic_counts_kafka.json (defaults to repo data/dataset)",
@@ -105,6 +121,12 @@ def main():
         "--interval",
         str(args.interval),
     ]
+    if args.producer_max and args.producer_max > 0:
+        producer_cmd += ["--max", str(args.producer_max)]
+    if args.producer_loop:
+        producer_cmd.append("--loop")
+    if args.use_now_ts:
+        producer_cmd.append("--use-now-timestamps")
 
     processor_cmd = [
         py,
