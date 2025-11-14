@@ -36,6 +36,7 @@ def derive(rec: Dict[str, Any]) -> Dict[str, Any]:
 def build_producer(bootstrap: str) -> KafkaProducer:
     return KafkaProducer(
         bootstrap_servers=bootstrap,
+        api_version=(3, 6, 0),
         value_serializer=lambda v: json.dumps(v, separators=(",", ":")).encode("utf-8"),
         key_serializer=lambda k: (str(k).encode("utf-8") if k is not None else None),
         linger_ms=5,
@@ -56,6 +57,7 @@ def main() -> int:
     consumer = KafkaConsumer(
         args.raw_topic,
         bootstrap_servers=args.bootstrap,
+        api_version=(3, 6, 0),
         group_id=args.group_id,
         enable_auto_commit=False,
         auto_offset_reset=auto_offset_reset,

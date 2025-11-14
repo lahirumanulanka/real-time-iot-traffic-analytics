@@ -1,10 +1,11 @@
 import argparse
 import os
 import signal
+import socket
 import sys
 import time
 from pathlib import Path
-from subprocess import Popen, PIPE, STDOUT
+from subprocess import Popen, PIPE, STDOUT, CalledProcessError, run
 from threading import Thread
 
 
@@ -25,12 +26,25 @@ def stream_output(proc: Popen, name: str):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run producer, processor, and consumer together. Press Ctrl+C to stop."
+        description=(
+            "Run end-to-end pipeline: optional Docker (Kafka/Postgres/Grafana), "
+            "Postgres sink, processor, and producer. Press Ctrl+C to stop."
+        )
     )
     parser.add_argument("--bootstrap", default="localhost:29092", help="Kafka bootstrap servers")
     parser.add_argument("--raw-topic", default="iot.traffic.raw", help="Raw input topic")
     parser.add_argument(
         "--processed-topic", default="iot.traffic.processed", help="Processed output topic"
+    )
+    parser.add_argument(
+        "--start-docker",
+        action="store_true",
+        help="Run 'docker compose up -d kafka postgres grafana' before starting scripts",
+    )
+    parser.add_argument(
+        "--compose-services",
+        default="kafka postgres grafana",
+        help="Space-separated docker compose services to start when --start-docker is set",
     )
     parser.add_argument(
         "--interval",
@@ -71,10 +85,31 @@ def main():
         help="Max messages for consumer (0 = unlimited)",
     )
     parser.add_argument(
+        "--no-consumer",
+        action="store_true",
+        help="Do not launch the console consumer (reduces noise)",
+    )
+    parser.add_argument(
         "--no-show-keys",
         action="store_true",
         help="Do not show keys in consumer output",
     )
+    parser.add_argument(
+        "--no-sink",
+        action="store_true",
+        help="Do not launch the Postgres sink",
+    )
+    parser.add_argument(
+        "--sink-batch",
+        type=int,
+        default=1,
+        help="Postgres sink batch size for commits (default 1 for realtime)",
+    )
+    parser.add_argument("--pg-host", default=os.getenv("PGHOST", "localhost"))
+    parser.add_argument("--pg-port", type=int, default=int(os.getenv("PGPORT", "5432")))
+    parser.add_argument("--pg-db", default=os.getenv("PGDATABASE", "traffic"))
+    parser.add_argument("--pg-user", default=os.getenv("PGUSER", "traffic"))
+    parser.add_argument("--pg-password", default=os.getenv("PGPASSWORD", "traffic"))
 
     args = parser.parse_args()
 
@@ -86,6 +121,7 @@ def main():
     producer_script = kafka_scripts_dir / "producer" / "traffic_raw_producer.py"
     processor_script = kafka_scripts_dir / "processor" / "traffic_processor.py"
     consumer_script = kafka_scripts_dir / "consumer" / "processed_consumer.py"
+    sink_script = kafka_scripts_dir / "sink" / "postgres_sink.py"
 
     if not producer_script.exists():
         print(f"Producer script not found: {producer_script}")
@@ -95,6 +131,9 @@ def main():
         sys.exit(1)
     if not consumer_script.exists():
         print(f"Consumer script not found: {consumer_script}")
+        sys.exit(1)
+    if not sink_script.exists():
+        print(f"Sink script not found: {sink_script}")
         sys.exit(1)
 
     # Default JSON dataset path
@@ -108,6 +147,43 @@ def main():
         sys.exit(1)
 
     py = sys.executable  # use current interpreter (e.g., venv python)
+
+    def wait_for_port(host: str, port: int, timeout: float = 60.0, step: float = 1.0) -> bool:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                with socket.create_connection((host, port), timeout=step):
+                    return True
+            except OSError:
+                time.sleep(step)
+        return False
+
+    if args.start_docker:
+        services = args.compose_services.split()
+        try:
+            print("Starting Docker services:", ", ".join(services))
+            run(["docker", "compose", "up", "-d", *services], cwd=str(repo_root), check=True)
+        except FileNotFoundError:
+            print("docker not found on PATH. Please install Docker Desktop or run without --start-docker.")
+            sys.exit(1)
+        except CalledProcessError as e:
+            print("Failed to start Docker services:", e)
+            sys.exit(1)
+
+        # Basic readiness checks
+        print("Waiting for Kafka at", args.bootstrap)
+        host, port_str = args.bootstrap.split(":", 1)
+        if not wait_for_port(host, int(port_str), timeout=90):
+            print("Kafka did not become ready in time.")
+            sys.exit(1)
+
+        print("Waiting for Postgres at", f"{args.pg_host}:{args.pg_port}")
+        if not wait_for_port(args.pg_host, int(args.pg_port), timeout=90):
+            print("Postgres did not become ready in time.")
+            sys.exit(1)
+
+        print("Waiting for Grafana at", "localhost:3000")
+        wait_for_port("localhost", 3000, timeout=60)
 
     producer_cmd = [
         py,
@@ -141,28 +217,64 @@ def main():
     if args.from_beginning:
         processor_cmd.append("--from-beginning")
 
-    consumer_cmd = [
-        py,
-        str(consumer_script),
-        "--bootstrap",
-        args.bootstrap,
-        "--topic",
-        args.processed_topic,
-    ]
-    if not args.no_show_keys:
-        consumer_cmd.append("--show-keys")
-    if args.consume_max and args.consume_max > 0:
-        consumer_cmd += ["--max", str(args.consume_max)]
+    consumer_cmd = None
+    if not args.no_consumer:
+        consumer_cmd = [
+            py,
+            str(consumer_script),
+            "--bootstrap",
+            args.bootstrap,
+            "--topic",
+            args.processed_topic,
+        ]
+        if not args.no_show_keys:
+            consumer_cmd.append("--show-keys")
+        if args.consume_max and args.consume_max > 0:
+            consumer_cmd += ["--max", str(args.consume_max)]
+
+    sink_cmd = None
+    if not args.no_sink:
+        sink_cmd = [
+            py,
+            str(sink_script),
+            "--bootstrap",
+            args.bootstrap,
+            "--topic",
+            args.processed_topic,
+            "--batch",
+            str(args.sink_batch),
+            "--pg-host",
+            str(args.pg_host),
+            "--pg-port",
+            str(args.pg_port),
+            "--pg-db",
+            str(args.pg_db),
+            "--pg-user",
+            str(args.pg_user),
+            "--pg-password",
+            str(args.pg_password),
+        ]
 
     print("Starting processes:")
-    print(" - PRODUCER:", " ".join(producer_cmd))
+    if sink_cmd:
+        print(" - SINK:", " ".join(sink_cmd))
     print(" - PROCESSOR:", " ".join(processor_cmd))
-    print(" - CONSUMER:", " ".join(consumer_cmd))
+    print(" - PRODUCER:", " ".join(producer_cmd))
+    if consumer_cmd:
+        print(" - CONSUMER:", " ".join(consumer_cmd))
 
     procs = {}
     threads = []
     try:
-        # Start processor first so it is ready to consume
+        # Start sink first (persists processed events)
+        if sink_cmd:
+            sink = Popen(sink_cmd, stdout=PIPE, stderr=STDOUT, cwd=str(repo_root))
+            procs["SINK"] = sink
+            t_sink = Thread(target=stream_output, args=(sink, "SINK"), daemon=True)
+            t_sink.start()
+            threads.append(t_sink)
+
+        # Start processor so it is ready to consume from raw and publish processed
         processor = Popen(processor_cmd, stdout=PIPE, stderr=STDOUT, cwd=str(repo_root))
         procs["PROCESSOR"] = processor
         t_proc = Thread(target=stream_output, args=(processor, "PROCESSOR"), daemon=True)
@@ -180,14 +292,16 @@ def main():
 
         time.sleep(0.8)
 
-        # Start consumer
-        consumer = Popen(consumer_cmd, stdout=PIPE, stderr=STDOUT, cwd=str(repo_root))
-        procs["CONSUMER"] = consumer
-        t_cons = Thread(target=stream_output, args=(consumer, "CONSUMER"), daemon=True)
-        t_cons.start()
-        threads.append(t_cons)
+        # Start consumer (optional)
+        if consumer_cmd:
+            consumer = Popen(consumer_cmd, stdout=PIPE, stderr=STDOUT, cwd=str(repo_root))
+            procs["CONSUMER"] = consumer
+            t_cons = Thread(target=stream_output, args=(consumer, "CONSUMER"), daemon=True)
+            t_cons.start()
+            threads.append(t_cons)
 
         print("All processes started. Press Ctrl+C to stop.")
+        print("Open Grafana at http://localhost:3000 (admin/admin) and view 'Traffic Overview'.")
 
         # Wait until any process exits unexpectedly; keep parent alive otherwise
         while True:

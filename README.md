@@ -1,10 +1,11 @@
-# Real-Time IoT Traffic Analytics (Student Guide)
+# Real-Time IoT Traffic Analytics
 
-This project demonstrates a simple real-time data pipeline using Kafka and Python to ingest, process, and view traffic detector data.
+I built this to learn Kafka + Python with a tiny but complete pipeline. It reads real traffic detector data, processes it, stores it in Postgres, and shows live charts in Grafana.
 
-- Producer reads real JSON data every few seconds and publishes to a raw Kafka topic.
-- Processor consumes raw events, derives useful flags, and republishes to a processed topic.
-- Consumer tails the processed topic to verify the end-to-end flow.
+- Producer publishes records to a raw Kafka topic.
+- Processor turns raw → processed and adds `is_operational`.
+- Sink writes processed events into Postgres so Grafana can query.
+- Dashboard shows a live time-series, daily peak/average, and a small health table.
 
 
 ## Quick Start (Windows PowerShell)
@@ -17,14 +18,21 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-2) Start Docker services (Kafka, etc.) in the background:
+2) One-command real-time run (this starts Docker, producer, processor, and sink):
 
 ```powershell
-# Use the variant that matches your Docker version
-docker compose up -d
-# or
-docker-compose up -d
+python .\kafka-scripts\run_all.py --start-docker --interval 2 --producer-loop --use-now-ts --no-consumer
 ```
+
+Now open Grafana and watch the charts update every few seconds:
+
+http://localhost:3000  (user/pass: admin / admin)
+
+Dashboard: Traffic Overview
+
+Notes:
+- Time range: keep “Last 1 hour” for the top time‑series (it’s live).
+- The two daily panels show the last 14 days automatically (they ignore the 1h window).
 
 3) (Optional) Create topics inside the Kafka container:
 
@@ -32,35 +40,38 @@ docker-compose up -d
 python .\kafka-scripts\create-topics.py --bootstrap localhost:9092
 ```
 
-4) Run all three processes together with the orchestrator:
+4) Or, run a short smoke test instead of continuous streaming:
 
 ```powershell
-python .\kafka-scripts\run_all.py
+python .\kafka-scripts\run_all.py --start-docker --interval 2 --producer-max 20 --use-now-ts --no-consumer
 ```
 
-Press Ctrl+C to stop. The orchestrator will start the processor first, then the producer, then the consumer, and prefix each subprocess line with [PROCESSOR]/[PRODUCER]/[CONSUMER].
+Press Ctrl+C to stop. The orchestrator starts the sink → processor → producer (and consumer if enabled). Lines are prefixed like [SINK]/[PROCESSOR]/[PRODUCER].
 
 
 ## Useful Variants (run_all.py)
 
 ```powershell
-# Start from latest offsets (no replay), default 5s interval
-python .\kafka-scripts\run_all.py --bootstrap localhost:29092
+# Start everything for real-time (quiet logs, no console consumer)
+python .\kafka-scripts\run_all.py --start-docker --interval 2 --producer-loop --use-now-ts --no-consumer
 
-# Replay previous data from the beginning
+# Small batch/smoke test (sends 20 records then exits)
+python .\kafka-scripts\run_all.py --start-docker --interval 2 --producer-max 20 --use-now-ts --no-consumer
+
+# Start services only (custom list)
+python .\kafka-scripts\run_all.py --start-docker --compose-services "kafka postgres grafana" --no-sink --no-consumer --producer-max 0
+
+# Replay previous raw data from earliest
 python .\kafka-scripts\run_all.py --from-beginning
 
-# Quick check: limit consumer output to 10 messages
-python .\kafka-scripts\run_all.py --consume-max 10
-
-# Change the send interval (seconds)
+# Change send interval (seconds)
 python .\kafka-scripts\run_all.py --interval 5
 
 # Use a custom dataset path
 python .\kafka-scripts\run_all.py --json-path .\data\dataset\traffic_counts_kafka.json
 
-# Hide keys in consumer output
-python .\kafka-scripts\run_all.py --no-show-keys
+# Show/hide consumer output and keys (if you enable the consumer)
+python .\kafka-scripts\run_all.py --consume-max 10 --no-show-keys
 ```
 
 Default topics and dataset:
@@ -86,9 +97,10 @@ Default topics and dataset:
 	- Supports `--show-keys` and `--max` to limit output.
 
 - Orchestrator (`kafka-scripts/run_all.py`):
-	- Starts the processor → producer → consumer in that order.
+	- Optional: starts Docker (`kafka`, `postgres`, `grafana`) and waits for them.
+	- Starts the sink → processor → producer (and consumer if you want).
 	- Clean shutdown on Ctrl+C.
-	- Pass-through options for bootstrap, topics, dataset path, replay behavior, interval, and consumer output limits.
+	- Useful flags: `--start-docker`, `--producer-loop`, `--use-now-ts`, `--no-consumer`, `--sink-batch`.
 
 
 ## Real-Time Metrics (Streaming)
@@ -128,7 +140,13 @@ docker compose up -d
 python .\kafka-scripts\sink\postgres_sink.py --bootstrap localhost:29092 --topic iot.traffic.processed --from-beginning
 ```
 
-3) Open Grafana at http://localhost:3000 (admin/admin). A Postgres datasource is auto-provisioned (name: Postgres). Create a dashboard and run queries like:
+3) Open Grafana at http://localhost:3000 (admin/admin). A Postgres datasource is auto-provisioned (name: Postgres). A ready-made dashboard is already in the repo at `grafana/dashboards/traffic-overview.json` (auto-provisioned). It has:
+	- Time‑series of events (live, last 1h, refresh 5s)
+	- Daily peak traffic (across sensors)
+	- Daily average traffic
+	- Sensor health table
+
+If you want to write your own panels, here are some example queries:
 
 ```sql
 -- Hourly events per sensor (last 24h)
@@ -179,6 +197,8 @@ Note: If Grafana was already running, restart it to pick up the auto-provisioned
 ```powershell
 docker compose restart grafana
 ```
+
+Tip: if a panel says “Data outside time range”, keep the dashboard on “Last 1 hour”. The daily panels already pull 14 days on their own.
 
 
 ## Optional: Forward to a Visualization Topic
@@ -266,10 +286,33 @@ notebooks/
 
 ## Notes for Students
 
-- Start services first (`docker compose up -d`), then run the orchestrator.
+- Easiest path: just run the orchestrator with `--start-docker` and it will start services for you.
 - If topics don’t exist, use `create-topics.py` once (or rely on your Kafka auto-create setting, if enabled).
 - Make sure you are inside the virtual environment when running scripts (`.venv`).
 - If you see missing package errors, run `pip install -r requirements.txt` again. If `six` is missing, install it with `pip install six`.
+
+
+## Useful Checks and Stop/Cleanup
+
+Quick Postgres checks (make sure new rows are arriving):
+
+```powershell
+docker compose exec postgres psql -U traffic -d traffic -c "SELECT COUNT(*) AS recent FROM traffic_events WHERE ts >= now() - interval '5 minutes';"
+docker compose exec postgres psql -U traffic -d traffic -c "SELECT date_trunc('minute', ts) AS t, COUNT(*) FROM traffic_events WHERE ts >= now() - interval '1 hour' GROUP BY 1 ORDER BY 1 DESC LIMIT 10;"
+```
+
+Stop everything cleanly:
+
+```powershell
+# If run_all.py is in the foreground, press Ctrl+C
+docker compose stop
+```
+
+If Grafana looks empty:
+- Time range “Last 1 hour”.
+- Datasource “Postgres” exists (restart Grafana if needed): `docker compose restart grafana`.
+- Keep the producer running (use `--producer-loop --use-now-ts`).
+
 
 
 ## Next Steps

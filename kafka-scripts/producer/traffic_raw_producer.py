@@ -106,6 +106,7 @@ def clean_record(rec: Dict[str, Any]) -> Dict[str, Any]:
 def build_producer(bootstrap: str) -> KafkaProducer:
     return KafkaProducer(
         bootstrap_servers=bootstrap,
+        api_version=(3, 6, 0),
         value_serializer=lambda v: json.dumps(v, separators=(",", ":")).encode("utf-8"),
         key_serializer=lambda k: (str(k).encode("utf-8") if k is not None else None),
         linger_ms=5,

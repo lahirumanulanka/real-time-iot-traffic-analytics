@@ -42,6 +42,7 @@ def build_consumer(bootstrap: str, topic: str, from_beginning: bool, group_id: s
     return KafkaConsumer(
         topic,
         bootstrap_servers=bootstrap,
+        api_version=(3, 6, 0),
         auto_offset_reset=auto_offset,
         enable_auto_commit=True,
         group_id=group_id,
